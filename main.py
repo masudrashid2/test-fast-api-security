@@ -1,17 +1,15 @@
-from datetime import timedelta, datetime
-from typing import Optional, List
+from datetime import datetime, timedelta
+from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi import Depends, FastAPI, HTTPException, Security, status
 from fastapi.security import (
     OAuth2PasswordBearer,
     OAuth2PasswordRequestForm,
-    SecurityScopes
+    SecurityScopes,
 )
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ValidationError
-from starlette import status
-
 
 # to get a string like this run:
 # openssl rand -hex 32
@@ -27,7 +25,14 @@ fake_users_db = {
         "email": "johndoe@example.com",
         "hashed_password": "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",
         "disabled": False,
-    }
+    },
+    "alice": {
+        "username": "alice",
+        "full_name": "Alice Chains",
+        "email": "alicechains@example.com",
+        "hashed_password": "$2b$12$gSvqqUPvlXP2tfVFaWK1Be7DlH.PKZbv5H8KnzzVgXXbVxpva.pFm",
+        "disabled": True,
+    },
 }
 
 
@@ -41,15 +46,6 @@ class TokenData(BaseModel):
     scopes: List[str] = []
 
 
-app = FastAPI()
-
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="token",
-    scopes={"me": "Read information about the current user.", "items": "Read items."},)
-
-
 class User(BaseModel):
     username: str
     email: Optional[str] = None
@@ -59,6 +55,16 @@ class User(BaseModel):
 
 class UserInDB(User):
     hashed_password: str
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="token",
+    scopes={"me": "Read information about the current user.", "items": "Read items."},
+)
+
+app = FastAPI()
 
 
 def verify_password(plain_password, hashed_password):
@@ -95,13 +101,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-async def get_current_user(security_scopes: SecurityScopes, token: str = Depends(oauth2_scheme)):
-
+async def get_current_user(
+    security_scopes: SecurityScopes, token: str = Depends(oauth2_scheme)
+):
     if security_scopes.scopes:
         authenticate_value = f'Bearer scope="{security_scopes.scope_str}"'
     else:
         authenticate_value = f"Bearer"
-
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -112,7 +118,6 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-
         token_scopes = payload.get("scopes", [])
         token_data = TokenData(scopes=token_scopes, username=username)
     except (JWTError, ValidationError):
@@ -120,7 +125,6 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
     user = get_user(fake_users_db, username=token_data.username)
     if user is None:
         raise credentials_exception
-
     for scope in security_scopes.scopes:
         if scope not in token_data.scopes:
             raise HTTPException(
@@ -131,7 +135,9 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
     return user
 
 
-async def get_current_active_user(current_user: User = Security(get_current_user, scopes=["me"])):
+async def get_current_active_user(
+    current_user: User = Security(get_current_user, scopes=["me"])
+):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
@@ -141,17 +147,12 @@ async def get_current_active_user(current_user: User = Security(get_current_user
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(fake_users_db, form_data.username, form_data.password)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username, "scopes": form_data.scopes},
-        expires_delta=access_token_expires
+        expires_delta=access_token_expires,
     )
-
     return {"access_token": access_token, "token_type": "bearer"}
 
 
@@ -161,6 +162,12 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
 
 
 @app.get("/users/me/items/")
-async def read_own_items(current_user: User = Security(get_current_active_user, scopes=["items"])):
+async def read_own_items(
+    current_user: User = Security(get_current_active_user, scopes=["items"])
+):
     return [{"item_id": "Foo", "owner": current_user.username}]
 
+
+@app.get("/status/")
+async def read_system_status(current_user: User = Depends(get_current_user)):
+    return {"status": "ok"}
