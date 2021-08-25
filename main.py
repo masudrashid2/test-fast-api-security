@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 from typing import Optional, List
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.security import (
     OAuth2PasswordBearer,
     OAuth2PasswordRequestForm,
@@ -115,7 +115,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     return user
 
 
-async def get_current_active_user(current_user: User = Depends(get_current_user)):
+async def get_current_active_user(current_user: User = Security(get_current_user, scopes=["me"])):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
@@ -145,6 +145,6 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
 
 
 @app.get("/users/me/items/")
-async def read_own_items(current_user: User = Depends(get_current_active_user)):
+async def read_own_items(current_user: User = Security(get_current_active_user, scopes=["items"])):
     return [{"item_id": "Foo", "owner": current_user.username}]
 
