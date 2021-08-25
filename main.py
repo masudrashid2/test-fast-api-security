@@ -9,7 +9,7 @@ from fastapi.security import (
 )
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette import status
 
 
@@ -38,7 +38,7 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: Optional[str] = None
-    # scopes: List[str] = []
+    scopes: List[str] = []
 
 
 app = FastAPI()
@@ -112,12 +112,22 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username)
-    except JWTError:
+
+        token_scopes = payload.get("scopes", [])
+        token_data = TokenData(scopes=token_scopes, username=username)
+    except (JWTError, ValidationError):
         raise credentials_exception
     user = get_user(fake_users_db, username=token_data.username)
     if user is None:
         raise credentials_exception
+
+    for scope in security_scopes.scopes:
+        if scope not in token_data.scopes:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not enough permissions",
+                headers={"WWW-Authenticate": authenticate_value},
+            )
     return user
 
 
